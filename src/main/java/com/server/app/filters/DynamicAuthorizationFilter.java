@@ -1,30 +1,29 @@
 package com.server.app.filters;
 
-import java.io.IOException;
-
+import com.fasterxml.jackson.databind.ObjectMapper;
 import com.server.app.config.SecurityRules;
+import com.server.app.dto.response.ExceptionResponse;
+import jakarta.servlet.FilterChain;
+import jakarta.servlet.ServletException;
+import jakarta.servlet.http.HttpServletRequest;
+import jakarta.servlet.http.HttpServletResponse;
 import org.springframework.security.core.Authentication;
 import org.springframework.security.core.context.SecurityContextHolder;
 import org.springframework.stereotype.Component;
 import org.springframework.util.AntPathMatcher;
 import org.springframework.web.filter.OncePerRequestFilter;
 
-import com.fasterxml.jackson.databind.ObjectMapper;
-import com.server.app.dto.response.ExceptionResponse;
-
-import jakarta.servlet.FilterChain;
-import jakarta.servlet.ServletException;
-import jakarta.servlet.http.HttpServletRequest;
-import jakarta.servlet.http.HttpServletResponse;
+import java.io.IOException;
 
 @Component
 public class DynamicAuthorizationFilter extends OncePerRequestFilter {
 
-    private final AntPathMatcher pathMatcher =
-            new AntPathMatcher();
+    private final AntPathMatcher pathMatcher = new AntPathMatcher();
+    private final ObjectMapper objectMapper;
 
-    private final ObjectMapper objectMapper =
-            new ObjectMapper();
+    public DynamicAuthorizationFilter(ObjectMapper objectMapper) {
+        this.objectMapper = objectMapper;
+    }
 
     @Override
     protected void doFilterInternal(
@@ -36,44 +35,33 @@ public class DynamicAuthorizationFilter extends OncePerRequestFilter {
         String method = request.getMethod();
         String path = request.getRequestURI();
 
-        if (SecurityRules.isIgnored(path)) {
-            filterChain.doFilter(request, response);
-            return;
-        }
+        if (SecurityRules.isIgnored(path)
+                || SecurityRules.isPublic(method, path)
+                || SecurityRules.isAuthOnly(method, path)) {
 
-        if (SecurityRules.isPublic(method, path)) {
-            filterChain.doFilter(request, response);
-            return;
-        }
-
-        if (SecurityRules.isAuthOnly(method, path)) {
             filterChain.doFilter(request, response);
             return;
         }
 
         Authentication authentication =
-                SecurityContextHolder
-                        .getContext()
-                        .getAuthentication();
+                SecurityContextHolder.getContext().getAuthentication();
 
-        if (authentication != null
-                && authentication.isAuthenticated()) {
+        if (authentication == null || !authentication.isAuthenticated()) {
+            sendError(
+                    response,
+                    HttpServletResponse.SC_UNAUTHORIZED,
+                    "Authentication required"
+            );
+            return;
+        }
 
-            if (!isAuthorized(
-                    authentication,
-                    method,
-                    path
-            )) {
-
-                sendError(
-                        response,
-                        HttpServletResponse.SC_FORBIDDEN,
-                        "Acceso denegado: no tienes permisos para esta ruta: "
-                                + path
-                );
-
-                return;
-            }
+        if (!isAuthorized(authentication, method, path)) {
+            sendError(
+                    response,
+                    HttpServletResponse.SC_FORBIDDEN,
+                    "Acceso denegado: no tienes permisos para esta ruta: " + path
+            );
+            return;
         }
 
         filterChain.doFilter(request, response);
@@ -84,30 +72,22 @@ public class DynamicAuthorizationFilter extends OncePerRequestFilter {
             String method,
             String path
     ) {
-
-        return authentication
-                .getAuthorities()
+        return authentication.getAuthorities()
                 .stream()
-                .anyMatch(a -> {
-
-                    String authority =
-                            a.getAuthority();
+                .anyMatch(authority -> {
 
                     String[] parts =
-                            authority.split(":", 2);
+                            authority.getAuthority().split(":", 2);
 
                     if (parts.length != 2) {
                         return false;
                     }
 
-                    String authMethod =
-                            parts[0];
+                    String allowedMethod = parts[0];
+                    String allowedPath = parts[1];
 
-                    String authPath =
-                            parts[1];
-
-                    return method.equalsIgnoreCase(authMethod)
-                            && pathMatcher.match(authPath, path);
+                    return method.equalsIgnoreCase(allowedMethod)
+                            && pathMatcher.match(allowedPath, path);
                 });
     }
 
@@ -122,16 +102,14 @@ public class DynamicAuthorizationFilter extends OncePerRequestFilter {
         }
 
         response.setStatus(status);
-        response.setContentType(
-                "application/json;charset=UTF-8"
-        );
+        response.setContentType("application/json");
+        response.setCharacterEncoding("UTF-8");
 
         ExceptionResponse error =
                 new ExceptionResponse(status, message);
 
-        String payload =
-                objectMapper.writeValueAsString(error);
-
-        response.getWriter().write(payload);
+        response.getWriter().write(
+                objectMapper.writeValueAsString(error)
+        );
     }
 }

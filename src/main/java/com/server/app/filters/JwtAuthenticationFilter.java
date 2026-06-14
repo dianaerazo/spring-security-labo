@@ -1,11 +1,18 @@
 package com.server.app.filters;
 
-import java.io.IOException;
-import java.util.Set;
-import java.util.stream.Collectors;
-
+import com.fasterxml.jackson.databind.ObjectMapper;
+import com.server.app.config.JsonWebToken;
 import com.server.app.config.SecurityRules;
-import org.springframework.context.annotation.Lazy;
+import com.server.app.dto.response.ExceptionResponse;
+import com.server.app.entities.User;
+import com.server.app.services.UserService;
+import io.jsonwebtoken.Claims;
+import io.jsonwebtoken.ExpiredJwtException;
+import io.jsonwebtoken.JwtException;
+import jakarta.servlet.FilterChain;
+import jakarta.servlet.ServletException;
+import jakarta.servlet.http.HttpServletRequest;
+import jakarta.servlet.http.HttpServletResponse;
 import org.springframework.security.authentication.UsernamePasswordAuthenticationToken;
 import org.springframework.security.core.GrantedAuthority;
 import org.springframework.security.core.authority.SimpleGrantedAuthority;
@@ -14,37 +21,30 @@ import org.springframework.security.web.authentication.WebAuthenticationDetailsS
 import org.springframework.stereotype.Component;
 import org.springframework.web.filter.OncePerRequestFilter;
 
-import com.fasterxml.jackson.databind.ObjectMapper;
-import com.server.app.config.JsonWebToken;
-import com.server.app.dto.response.ExceptionResponse;
-import com.server.app.entities.User;
-import com.server.app.services.UserService;
-
-import io.jsonwebtoken.Claims;
-import io.jsonwebtoken.ExpiredJwtException;
-import io.jsonwebtoken.JwtException;
-import jakarta.servlet.FilterChain;
-import jakarta.servlet.ServletException;
-import jakarta.servlet.http.HttpServletRequest;
-import jakarta.servlet.http.HttpServletResponse;
+import java.io.IOException;
+import java.util.HashSet;
+import java.util.Set;
+import java.util.stream.Collectors;
 
 @Component
 public class JwtAuthenticationFilter extends OncePerRequestFilter {
 
     private final JsonWebToken jwtUtil;
     private final UserService userService;
+    private final ObjectMapper objectMapper;
 
     public JwtAuthenticationFilter(
-            @Lazy JsonWebToken jwtUtil,
-            UserService userService
+            JsonWebToken jwtUtil,
+            UserService userService,
+            ObjectMapper objectMapper
     ) {
         this.jwtUtil = jwtUtil;
         this.userService = userService;
+        this.objectMapper = objectMapper;
     }
 
     @Override
     protected boolean shouldNotFilter(HttpServletRequest request) {
-
         String method = request.getMethod();
         String path = request.getRequestURI();
 
@@ -59,12 +59,9 @@ public class JwtAuthenticationFilter extends OncePerRequestFilter {
             FilterChain filterChain
     ) throws ServletException, IOException {
 
-        final String authHeader =
-                request.getHeader("Authorization");
+        String authHeader = request.getHeader("Authorization");
 
-        if (authHeader == null
-                || !authHeader.startsWith("Bearer ")) {
-
+        if (authHeader == null || !authHeader.startsWith("Bearer ")) {
             sendErrorResponse(
                     response,
                     HttpServletResponse.SC_UNAUTHORIZED,
@@ -73,13 +70,19 @@ public class JwtAuthenticationFilter extends OncePerRequestFilter {
             return;
         }
 
-        final String token =
-                authHeader.substring(7);
+        String token = authHeader.substring(7).trim();
+
+        if (token.isEmpty()) {
+            sendErrorResponse(
+                    response,
+                    HttpServletResponse.SC_UNAUTHORIZED,
+                    "Bearer token required"
+            );
+            return;
+        }
 
         try {
-
             if (jwtUtil.isTokenExpired(token)) {
-
                 sendErrorResponse(
                         response,
                         HttpServletResponse.SC_UNAUTHORIZED,
@@ -88,11 +91,9 @@ public class JwtAuthenticationFilter extends OncePerRequestFilter {
                 return;
             }
 
-            Claims claims =
-                    jwtUtil.extracClaims(token);
+            Claims claims = jwtUtil.extractClaims(token);
 
             if (claims == null) {
-
                 sendErrorResponse(
                         response,
                         HttpServletResponse.SC_UNAUTHORIZED,
@@ -101,11 +102,9 @@ public class JwtAuthenticationFilter extends OncePerRequestFilter {
                 return;
             }
 
-            Integer userId =
-                    jwtUtil.extractIdUser(token);
+            Long userId = jwtUtil.extractUserId(token);
 
             if (userId == null) {
-
                 sendErrorResponse(
                         response,
                         HttpServletResponse.SC_UNAUTHORIZED,
@@ -114,11 +113,9 @@ public class JwtAuthenticationFilter extends OncePerRequestFilter {
                 return;
             }
 
-            User user =
-                    userService.findById(userId);
+            User user = userService.findById(userId.intValue());
 
             if (user == null) {
-
                 sendErrorResponse(
                         response,
                         HttpServletResponse.SC_UNAUTHORIZED,
@@ -128,7 +125,6 @@ public class JwtAuthenticationFilter extends OncePerRequestFilter {
             }
 
             if (user.isBlocked()) {
-
                 sendErrorResponse(
                         response,
                         HttpServletResponse.SC_UNAUTHORIZED,
@@ -137,18 +133,41 @@ public class JwtAuthenticationFilter extends OncePerRequestFilter {
                 return;
             }
 
-            Set<GrantedAuthority> authorities =
-                    user.getRole()
-                            .getPermissions()
-                            .stream()
-                            .map(permission ->
-                                    new SimpleGrantedAuthority(
-                                            permission.getMethod()
-                                                    + ":"
-                                                    + permission.getPath()
-                                    )
-                            )
-                            .collect(Collectors.toSet());
+            if (user.getRole() == null) {
+                sendErrorResponse(
+                        response,
+                        HttpServletResponse.SC_UNAUTHORIZED,
+                        "Your account does not have a role"
+                );
+                return;
+            }
+
+            if (Boolean.FALSE.equals(user.getRole().getActive())) {
+                sendErrorResponse(
+                        response,
+                        HttpServletResponse.SC_UNAUTHORIZED,
+                        "Your account role is not active"
+                );
+                return;
+            }
+
+            Set<GrantedAuthority> authorities = new HashSet<>();
+
+            if (user.getRole().getPermissions() != null) {
+                authorities.addAll(
+                        user.getRole()
+                                .getPermissions()
+                                .stream()
+                                .map(permission ->
+                                        new SimpleGrantedAuthority(
+                                                permission.getMethod()
+                                                        + ":"
+                                                        + permission.getPath()
+                                        )
+                                )
+                                .collect(Collectors.toSet())
+                );
+            }
 
             authorities.add(
                     new SimpleGrantedAuthority(
@@ -174,24 +193,21 @@ public class JwtAuthenticationFilter extends OncePerRequestFilter {
 
             filterChain.doFilter(request, response);
 
-        } catch (ExpiredJwtException e) {
-
+        } catch (ExpiredJwtException exception) {
             sendErrorResponse(
                     response,
                     HttpServletResponse.SC_UNAUTHORIZED,
                     "Token expired"
             );
 
-        } catch (JwtException e) {
-
+        } catch (JwtException | IllegalArgumentException exception) {
             sendErrorResponse(
                     response,
                     HttpServletResponse.SC_UNAUTHORIZED,
-                    "Token invalid"
+                    "Invalid token"
             );
 
-        } catch (Exception e) {
-
+        } catch (Exception exception) {
             sendErrorResponse(
                     response,
                     HttpServletResponse.SC_INTERNAL_SERVER_ERROR,
@@ -210,15 +226,17 @@ public class JwtAuthenticationFilter extends OncePerRequestFilter {
             return;
         }
 
+        SecurityContextHolder.clearContext();
+
         response.setStatus(status);
         response.setContentType("application/json");
+        response.setCharacterEncoding("UTF-8");
 
         ExceptionResponse error =
                 new ExceptionResponse(status, message);
 
-        String json =
-                new ObjectMapper().writeValueAsString(error);
-
-        response.getWriter().write(json);
+        response.getWriter().write(
+                objectMapper.writeValueAsString(error)
+        );
     }
 }

@@ -3,9 +3,13 @@ package com.server.app.config;
 import java.util.Map;
 import java.util.Set;
 
-public class SecurityRules {
+public final class SecurityRules {
+
+    private SecurityRules() {
+    }
 
     public static final Map<String, Set<String>> PUBLIC = Map.of(
+            "GET", Set.of("/api/public/info"),
             "POST", Set.of(
                     "/api/auth/login",
                     "/api/auth/signup"
@@ -19,6 +23,9 @@ public class SecurityRules {
             "PUT", Set.of(
                     "/api/auth/update/profile",
                     "/api/auth/update/password"
+            ),
+            "POST", Set.of(
+                    "/api/auth/logout"
             )
     );
 
