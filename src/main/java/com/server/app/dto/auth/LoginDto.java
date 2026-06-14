@@ -8,7 +8,7 @@ import lombok.Setter;
 @Setter
 public class LoginDto {
 
-    @NotBlank(message = "El username no puede estar vacío")
+    @NotBlank(message = "El nombre de usuario no puede estar vacío")
     private String username;
 
     @NotBlank(message = "La contraseña no puede estar vacía")

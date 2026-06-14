@@ -26,12 +26,12 @@ public class RoleService {
     private final RoleRepository roleRepository;
     private final PermissionRepository permissionRepository;
 
-    @Transactional
+    @Transactional(readOnly = true)
     public Page<Role> findAll(int page, int size) {
         return roleRepository.findAll(PageRequest.of(page, size));
     }
 
-    @Transactional
+    @Transactional(readOnly = true)
     public Optional<Role> findById(Long id) {
         return roleRepository.findById(id);
     }
@@ -39,38 +39,52 @@ public class RoleService {
     @Transactional
     public Role save(RoleDto dto) {
         Role role = new Role();
+
         role.setName(dto.getName());
+        role.setActive(dto.getActive());
+
         if (dto.getPermissions() != null && !dto.getPermissions().isEmpty()) {
-            List<Long> ids = dto.getPermissions()
-                    .stream()
-                    .map(AssingPermissionDto::getId)
-                    .filter(Objects::nonNull)
-                    .toList();
-            Set<Permission> permissions = new HashSet<>(permissionRepository.findAllById(ids));
+            Set<Permission> permissions = getPermissions(dto);
             role.setPermissions(permissions);
         }
+
         return roleRepository.save(role);
     }
 
     @Transactional
     public Role update(Long id, RoleDto dto) {
-        Role role = roleRepository.findById(id).orElseThrow(() -> new NotFoundException("Role not found"));
+        Role role = roleRepository.findById(id)
+                .orElseThrow(() -> new NotFoundException("Role not found"));
+
         role.setName(dto.getName());
+
         if (dto.getPermissions() != null && !dto.getPermissions().isEmpty()) {
-            List<Long> ids = dto.getPermissions()
-                    .stream()
-                    .map(AssingPermissionDto::getId)
-                    .filter(Objects::nonNull)
-                    .toList();
-            Set<Permission> permissions = new HashSet<>(permissionRepository.findAllById(ids));
+            Set<Permission> permissions = getPermissions(dto);
             role.setPermissions(permissions);
         }
+
+        if (dto.getActive() != null) {
+            role.setActive(dto.getActive());
+        }
+
         return roleRepository.save(role);
     }
 
     @Transactional
     public void delete(Long id) {
-        roleRepository.deleteById(id);
+        Role role = roleRepository.findById(id)
+                .orElseThrow(() -> new NotFoundException("Role not found"));
+
+        roleRepository.delete(role);
     }
 
+    private Set<Permission> getPermissions(RoleDto dto) {
+        List<Long> permissionIds = dto.getPermissions()
+                .stream()
+                .map(AssingPermissionDto::getId)
+                .filter(Objects::nonNull)
+                .toList();
+
+        return new HashSet<>(permissionRepository.findAllById(permissionIds));
+    }
 }

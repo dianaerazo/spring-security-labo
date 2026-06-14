@@ -1,8 +1,16 @@
 package com.server.app.dto.response;
 
-public record PaginationMeta(
-        int page,
-        int pageSize,
-        int pageCount,
-        long total
-) {}
+import lombok.AllArgsConstructor;
+import lombok.Getter;
+import lombok.Setter;
+
+@Getter
+@Setter
+@AllArgsConstructor
+public class PaginationMeta {
+
+    private int page;
+    private int pageSize;
+    private int pageCount;
+    private long total;
+}
